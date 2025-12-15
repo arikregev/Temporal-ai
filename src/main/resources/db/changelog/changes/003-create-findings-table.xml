@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
+
+    <changeSet id="003-create-findings-table" author="temporal-ai">
+        <createTable tableName="findings">
+            <column name="finding_id" type="UUID">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="scan_id" type="UUID">
+                <constraints nullable="false"/>
+            </column>
+            <column name="cwe_id" type="VARCHAR(20)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="severity" type="VARCHAR(20)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="title" type="VARCHAR(500)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="description" type="TEXT"/>
+            <column name="file_path" type="VARCHAR(1000)"/>
+            <column name="line_number" type="INTEGER"/>
+            <column name="column_number" type="INTEGER"/>
+            <column name="tool" type="VARCHAR(100)"/>
+            <column name="tool_finding_id" type="VARCHAR(255)"/>
+            <column name="raw_output" type="JSONB"/>
+            <column name="is_reachable" type="BOOLEAN" defaultValueBoolean="false"/>
+            <column name="is_false_positive" type="BOOLEAN" defaultValueBoolean="false"/>
+            <column name="status" type="VARCHAR(20)" defaultValue="OPEN">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        
+        <addForeignKeyConstraint
+            baseTableName="findings"
+            baseColumnNames="scan_id"
+            constraintName="fk_findings_scan"
+            referencedTableName="scans"
+            referencedColumnNames="scan_id"
+            onDelete="CASCADE"/>
+        
+        <addForeignKeyConstraint
+            baseTableName="findings"
+            baseColumnNames="cwe_id"
+            constraintName="fk_findings_cwe"
+            referencedTableName="cwes"
+            referencedColumnNames="cwe_id"/>
+        
+        <createIndex indexName="idx_findings_scan_id">
+            <column name="scan_id"/>
+        </createIndex>
+        
+        <createIndex indexName="idx_findings_cwe_id">
+            <column name="cwe_id"/>
+        </createIndex>
+        
+        <createIndex indexName="idx_findings_severity">
+            <column name="severity"/>
+        </createIndex>
+        
+        <createIndex indexName="idx_findings_status">
+            <column name="status"/>
+        </createIndex>
+        
+        <createIndex indexName="idx_findings_file_path">
+            <column name="file_path"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

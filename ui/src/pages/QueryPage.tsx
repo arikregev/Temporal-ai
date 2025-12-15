@@ -1,0 +1,102 @@
+import { useState } from 'react'
+import {
+  Box,
+  TextField,
+  Button,
+  Paper,
+  Typography,
+  CircularProgress,
+  Chip,
+} from '@mui/material'
+import { useMutation } from '@tanstack/react-query'
+import { queryApi, QueryResponse } from '../services/api'
+import SendIcon from '@mui/icons-material/Send'
+
+function QueryPage() {
+  const [query, setQuery] = useState('')
+  const [team, setTeam] = useState('')
+  const [history, setHistory] = useState<QueryResponse[]>([])
+
+  const mutation = useMutation({
+    mutationFn: (q: string) => queryApi.processQuery({ query: q, team }),
+    onSuccess: (data) => {
+      setHistory([data, ...history])
+      setQuery('')
+    },
+  })
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (query.trim()) {
+      mutation.mutate(query)
+    }
+  }
+
+  return (
+    <Box>
+      <Typography variant="h4" gutterBottom>
+        Natural Language Query
+      </Typography>
+      
+      <Paper sx={{ p: 2, mb: 3 }}>
+        <form onSubmit={handleSubmit}>
+          <TextField
+            fullWidth
+            label="Team (optional)"
+            value={team}
+            onChange={(e) => setTeam(e.target.value)}
+            sx={{ mb: 2 }}
+          />
+          <TextField
+            fullWidth
+            multiline
+            rows={3}
+            label="Ask a question"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="e.g., Why did scan X take 47 minutes?"
+            sx={{ mb: 2 }}
+          />
+          <Button
+            type="submit"
+            variant="contained"
+            endIcon={mutation.isPending ? <CircularProgress size={20} /> : <SendIcon />}
+            disabled={!query.trim() || mutation.isPending}
+          >
+            Submit Query
+          </Button>
+        </form>
+      </Paper>
+
+      {mutation.isError && (
+        <Paper sx={{ p: 2, mb: 2, bgcolor: 'error.light' }}>
+          <Typography color="error">
+            Error: {mutation.error instanceof Error ? mutation.error.message : 'Unknown error'}
+          </Typography>
+        </Paper>
+      )}
+
+      {history.length > 0 && (
+        <Box>
+          <Typography variant="h6" gutterBottom>
+            Query History
+          </Typography>
+          {history.map((response, idx) => (
+            <Paper key={idx} sx={{ p: 2, mb: 2 }}>
+              <Box sx={{ display: 'flex', gap: 1, mb: 2 }}>
+                <Chip label={response.source} size="small" />
+                <Chip label={`Confidence: ${(response.confidence * 100).toFixed(0)}%`} size="small" />
+              </Box>
+              <Typography variant="body1" sx={{ whiteSpace: 'pre-wrap' }}>
+                {response.answer}
+              </Typography>
+            </Paper>
+          ))}
+        </Box>
+      )}
+    </Box>
+  )
+}
+
+export default QueryPage
+

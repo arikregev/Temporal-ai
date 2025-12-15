@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
+
+    <changeSet id="001-create-scans-table" author="temporal-ai">
+        <createTable tableName="scans">
+            <column name="scan_id" type="UUID">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="workflow_id" type="VARCHAR(255)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="run_id" type="VARCHAR(255)"/>
+            <column name="team" type="VARCHAR(100)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="project" type="VARCHAR(255)"/>
+            <column name="scan_type" type="VARCHAR(50)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="status" type="VARCHAR(20)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="started_at" type="TIMESTAMP">
+                <constraints nullable="false"/>
+            </column>
+            <column name="completed_at" type="TIMESTAMP"/>
+            <column name="duration_ms" type="BIGINT"/>
+            <column name="total_findings" type="INTEGER" defaultValueNumeric="0"/>
+            <column name="critical_findings" type="INTEGER" defaultValueNumeric="0"/>
+            <column name="high_findings" type="INTEGER" defaultValueNumeric="0"/>
+            <column name="medium_findings" type="INTEGER" defaultValueNumeric="0"/>
+            <column name="low_findings" type="INTEGER" defaultValueNumeric="0"/>
+            <column name="metadata" type="JSONB"/>
+            <column name="created_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        
+        <createIndex indexName="idx_scans_team">
+            <column name="team"/>
+        </createIndex>
+        
+        <createIndex indexName="idx_scans_status">
+            <column name="status"/>
+        </createIndex>
+        
+        <createIndex indexName="idx_scans_started_at">
+            <column name="started_at"/>
+        </createIndex>
+        
+        <createIndex indexName="idx_scans_workflow_id">
+            <column name="workflow_id"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

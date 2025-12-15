@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
+
+    <changeSet id="004-create-knowledge-base-table" author="temporal-ai">
+        <createTable tableName="knowledge_base">
+            <column name="kb_id" type="UUID">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="question" type="TEXT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="answer" type="TEXT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="question_variations" type="JSONB"/>
+            <column name="context_tags" type="VARCHAR(255)[]"/>
+            <column name="team" type="VARCHAR(100)"/>
+            <column name="project" type="VARCHAR(255)"/>
+            <column name="created_by" type="VARCHAR(255)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_by" type="VARCHAR(255)"/>
+            <column name="usage_count" type="INTEGER" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="is_active" type="BOOLEAN" defaultValueBoolean="true">
+                <constraints nullable="false"/>
+            </column>
+            <column name="version" type="INTEGER" defaultValueNumeric="1">
+                <constraints nullable="false"/>
+            </column>
+            <column name="approval_status" type="VARCHAR(20)" defaultValue="PENDING">
+                <constraints nullable="false"/>
+            </column>
+            <column name="approved_by" type="VARCHAR(255)"/>
+            <column name="approved_at" type="TIMESTAMP"/>
+        </createTable>
+        
+        <createIndex indexName="idx_kb_team">
+            <column name="team"/>
+        </createIndex>
+        
+        <createIndex indexName="idx_kb_is_active">
+            <column name="is_active"/>
+        </createIndex>
+        
+        <createIndex indexName="idx_kb_approval_status">
+            <column name="approval_status"/>
+        </createIndex>
+        
+        <createIndex indexName="idx_kb_created_at">
+            <column name="created_at"/>
+        </createIndex>
+        
+        <createIndex indexName="idx_kb_usage_count">
+            <column name="usage_count"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>
