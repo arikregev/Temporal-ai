@@ -31,8 +31,12 @@ public class QueryService {
     @Inject
     KnowledgeBaseService knowledgeBaseService;
     
-    private static final Pattern SCAN_ID_PATTERN = Pattern.compile("scan\\s+(\\w+)", Pattern.CASE_INSENSITIVE);
-    private static final Pattern WORKFLOW_ID_PATTERN = Pattern.compile("workflow\\s+(\\w+)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern SCAN_ID_PATTERN = Pattern.compile("scan\\s+([a-zA-Z0-9_-]+)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern WORKFLOW_ID_PATTERN = Pattern.compile("workflow\\s+([a-zA-Z0-9_-]+)", Pattern.CASE_INSENSITIVE);
+    // Pattern to match UUIDs or workflow IDs in various formats
+    private static final Pattern UUID_PATTERN = Pattern.compile("([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", Pattern.CASE_INSENSITIVE);
+    // Pattern to match workflow IDs (alphanumeric with dashes/underscores, typically 20+ chars)
+    private static final Pattern WORKFLOW_ID_IN_TEXT_PATTERN = Pattern.compile("([a-zA-Z0-9_-]{20,})", Pattern.CASE_INSENSITIVE);
     private static final Pattern TEAM_PATTERN = Pattern.compile("team\\s+(\\w+)", Pattern.CASE_INSENSITIVE);
     private static final Pattern DAYS_PATTERN = Pattern.compile("(\\d+)\\s+days?", Pattern.CASE_INSENSITIVE);
     
@@ -41,6 +45,22 @@ public class QueryService {
      */
     private LlmClient.QueryIntent classifyIntentByPattern(String query) {
         String lowerQuery = query.toLowerCase();
+        
+        // Check if query contains workflow/scan IDs - prioritize workflow queries
+        if (WORKFLOW_ID_PATTERN.matcher(query).find() || 
+            UUID_PATTERN.matcher(query).find() ||
+            WORKFLOW_ID_IN_TEXT_PATTERN.matcher(query).find() ||
+            lowerQuery.contains("workflow") || lowerQuery.contains("scan")) {
+            // If it mentions duration/time with workflow, it's a duration query
+            if (lowerQuery.contains("duration") || lowerQuery.contains("took") || 
+                lowerQuery.contains("time") || lowerQuery.contains("minutes") || 
+                lowerQuery.contains("hours") || lowerQuery.contains("long") ||
+                lowerQuery.contains("why") || lowerQuery.contains("how long")) {
+                return new LlmClient.QueryIntent(LlmClient.QueryIntent.IntentType.SCAN_DURATION, query);
+            }
+            // If it mentions workflow/scan, treat as workflow query (will be handled specially)
+            return new LlmClient.QueryIntent(LlmClient.QueryIntent.IntentType.SCAN_DURATION, query);
+        }
         
         if (lowerQuery.contains("duration") || lowerQuery.contains("took") || lowerQuery.contains("time") || 
             lowerQuery.contains("minutes") || lowerQuery.contains("hours") || lowerQuery.contains("long")) {
@@ -106,16 +126,23 @@ public class QueryService {
     }
     
     private QueryResponse handleScanDurationQuery(String query) {
-        Matcher workflowMatcher = WORKFLOW_ID_PATTERN.matcher(query);
-        Matcher scanMatcher = SCAN_ID_PATTERN.matcher(query);
+        Log.info("Handling scan duration query: " + query);
         
         String workflowId = null;
         String runId = null;
         
+        // Try multiple patterns to extract workflow/scan ID
+        Matcher workflowMatcher = WORKFLOW_ID_PATTERN.matcher(query);
+        Matcher scanMatcher = SCAN_ID_PATTERN.matcher(query);
+        Matcher uuidMatcher = UUID_PATTERN.matcher(query);
+        Matcher workflowIdMatcher = WORKFLOW_ID_IN_TEXT_PATTERN.matcher(query);
+        
         if (workflowMatcher.find()) {
             workflowId = workflowMatcher.group(1);
+            Log.info("Extracted workflow ID from 'workflow X' pattern: " + workflowId);
         } else if (scanMatcher.find()) {
             String scanIdStr = scanMatcher.group(1);
+            Log.info("Found scan ID pattern: " + scanIdStr);
             // Try to find scan and get workflow ID
             try {
                 UUID scanId = UUID.fromString(scanIdStr);
@@ -123,42 +150,113 @@ public class QueryService {
                 if (scanOpt.isPresent()) {
                     workflowId = scanOpt.get().workflowId;
                     runId = scanOpt.get().runId;
+                    Log.info("Found scan in DB, workflow ID: " + workflowId);
+                } else {
+                    Log.warn("Scan ID not found in database: " + scanIdStr);
                 }
             } catch (IllegalArgumentException e) {
-                // Not a UUID, treat as workflow ID
+                // Not a UUID, might be a workflow ID
                 workflowId = scanIdStr;
+                Log.info("Treating scan ID as workflow ID: " + workflowId);
+            }
+        } else if (uuidMatcher.find()) {
+            String uuidStr = uuidMatcher.group(1);
+            Log.info("Found UUID pattern: " + uuidStr);
+            // Try as scan ID first
+            try {
+                UUID scanId = UUID.fromString(uuidStr);
+                var scanOpt = queryLayer.getScanById(scanId);
+                if (scanOpt.isPresent()) {
+                    workflowId = scanOpt.get().workflowId;
+                    runId = scanOpt.get().runId;
+                    Log.info("Found scan in DB by UUID, workflow ID: " + workflowId);
+                } else {
+                    // Try as workflow ID directly
+                    workflowId = uuidStr;
+                    Log.info("UUID not found as scan, trying as workflow ID: " + workflowId);
+                }
+            } catch (IllegalArgumentException e) {
+                workflowId = uuidStr;
+            }
+        } else if (workflowIdMatcher.find()) {
+            // Extract potential workflow ID (long alphanumeric string)
+            String potentialId = workflowIdMatcher.group(1);
+            Log.info("Found potential workflow ID pattern: " + potentialId);
+            // Check if it exists in database as workflow ID
+            var scanOpt = queryLayer.getScanByWorkflowId(potentialId);
+            if (scanOpt.isPresent()) {
+                workflowId = potentialId;
+                runId = scanOpt.get().runId;
+                Log.info("Found workflow ID in database: " + workflowId);
+            } else {
+                // Try it anyway - might be a workflow ID not yet in DB
+                workflowId = potentialId;
+                Log.info("Trying potential workflow ID: " + workflowId);
             }
         } else {
-            // Extract workflow ID from query using LLM
-            String extracted = llmClient.generate(
-                "Extract the workflow ID or scan ID from this query: " + query + 
-                "\nRespond with only the ID, nothing else."
-            );
-            workflowId = extracted.trim();
+            // Try to extract workflow ID using LLM as last resort
+            Log.info("No pattern match found, trying LLM extraction");
+            try {
+                String extracted = llmClient.generate(
+                    "Extract the workflow ID or scan ID from this query: " + query + 
+                    "\nRespond with only the ID, nothing else. If no ID found, respond with 'NONE'."
+                );
+                String trimmed = extracted.trim();
+                if (!trimmed.equalsIgnoreCase("NONE") && !trimmed.isEmpty() && 
+                    !trimmed.contains("unavailable") && !trimmed.contains("error")) {
+                    workflowId = trimmed;
+                    Log.info("LLM extracted workflow ID: " + workflowId);
+                }
+            } catch (Exception e) {
+                Log.debug("LLM extraction failed: " + e.getMessage());
+            }
         }
         
-        if (workflowId == null) {
+        if (workflowId == null || workflowId.isEmpty()) {
+            Log.warn("Could not extract workflow ID from query: " + query);
             return new QueryResponse(
                 QueryResponse.ResponseSource.LLM,
-                "Could not identify workflow or scan ID from the query.",
+                "Could not identify workflow or scan ID from the query. Please provide a workflow ID or scan ID.",
                 null,
                 0.0
             );
         }
         
+        Log.info("Querying Temporal for workflow: " + workflowId + ", runId: " + runId);
         ScanDurationAnalysis analysis = queryLayer.analyzeScanDuration(workflowId, runId);
+        Log.info("Temporal query completed. Duration: " + analysis.durationMs() + "ms, Analysis: " + analysis.analysis());
         
-        // Enhance with LLM explanation
-        String enhancedAnswer = llmClient.generate(
-            String.format(
-                "A security scan (workflow: %s) took %d milliseconds. " +
-                "Analysis: %s. " +
-                "Explain why this scan might have taken this long in simple terms.",
+        // Enhance with LLM explanation if available
+        String enhancedAnswer;
+        try {
+            enhancedAnswer = llmClient.generate(
+                String.format(
+                    "A security scan (workflow: %s) took %d milliseconds. " +
+                    "Analysis: %s. " +
+                    "Explain why this scan might have taken this long in simple terms.",
+                    workflowId,
+                    analysis.durationMs() != null ? analysis.durationMs() : 0,
+                    analysis.analysis()
+                )
+            );
+            // Check if LLM returned error
+            if (enhancedAnswer.contains("unavailable") || enhancedAnswer.contains("Error:")) {
+                enhancedAnswer = String.format(
+                    "Workflow %s analysis:\nDuration: %d milliseconds\n%s",
+                    workflowId,
+                    analysis.durationMs() != null ? analysis.durationMs() : 0,
+                    analysis.analysis()
+                );
+            }
+        } catch (Exception e) {
+            Log.debug("LLM enhancement failed, using basic response");
+            enhancedAnswer = String.format(
+                "Workflow %s analysis:\nDuration: %d milliseconds\n%s",
                 workflowId,
                 analysis.durationMs() != null ? analysis.durationMs() : 0,
                 analysis.analysis()
-            )
-        );
+            );
+        }
         
         return new QueryResponse(
             QueryResponse.ResponseSource.QUERY_LAYER,
@@ -290,6 +388,21 @@ public class QueryService {
     }
     
     private QueryResponse handleGeneralQuery(String query, String team) {
+        // Check if query mentions workflows/scans - try to extract and query Temporal
+        String lowerQuery = query.toLowerCase();
+        if (lowerQuery.contains("workflow") || lowerQuery.contains("scan") || 
+            WORKFLOW_ID_PATTERN.matcher(query).find() ||
+            UUID_PATTERN.matcher(query).find() ||
+            WORKFLOW_ID_IN_TEXT_PATTERN.matcher(query).find()) {
+            
+            Log.info("General query mentions workflow/scan, attempting to extract and query Temporal");
+            // Try to handle as workflow query
+            QueryResponse workflowResponse = handleScanDurationQuery(query);
+            if (workflowResponse.confidence() > 0.0) {
+                return workflowResponse;
+            }
+        }
+        
         // Use LLM to generate answer, potentially with context from query layer
         String context = "You are a security analyst assistant. Answer the following question: " + query;
         if (team != null) {

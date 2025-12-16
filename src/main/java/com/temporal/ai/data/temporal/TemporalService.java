@@ -156,30 +156,42 @@ public class TemporalService {
      * Analyze workflow execution to extract scan metadata
      */
     public ScanMetadata extractScanMetadata(String workflowId, String runId) {
-        Optional<WorkflowExecutionInfo> executionInfo = getWorkflowExecution(workflowId, runId);
+        Log.info("Extracting scan metadata for workflow: " + workflowId + ", runId: " + runId);
         
-        if (executionInfo.isEmpty()) {
+        try {
+            Optional<WorkflowExecutionInfo> executionInfo = getWorkflowExecution(workflowId, runId);
+            
+            if (executionInfo.isEmpty()) {
+                Log.warn("Workflow execution not found: " + workflowId);
+                return new ScanMetadata(workflowId, runId, null, null, null, null, null);
+            }
+            
+            WorkflowExecutionInfo info = executionInfo.get();
+            Log.info("Workflow execution found. Status: " + info.status() + ", Duration: " + info.durationMs() + "ms");
+            
+            Map<String, Object> memo = info.memo();
+            Map<String, Object> searchAttributes = info.searchAttributes();
+            
+            String team = extractString(memo, "team");
+            String project = extractString(memo, "project");
+            String scanType = extractString(memo, "scanType");
+            String status = mapTemporalStatus(info.status());
+            
+            Log.info("Extracted metadata - Team: " + team + ", Project: " + project + ", ScanType: " + scanType);
+            
+            return new ScanMetadata(
+                workflowId,
+                info.runId(),
+                team,
+                project,
+                scanType,
+                status,
+                info.durationMs()
+            );
+        } catch (Exception e) {
+            Log.error("Error extracting scan metadata for workflow " + workflowId, e);
             return new ScanMetadata(workflowId, runId, null, null, null, null, null);
         }
-        
-        WorkflowExecutionInfo info = executionInfo.get();
-        Map<String, Object> memo = info.memo();
-        Map<String, Object> searchAttributes = info.searchAttributes();
-        
-        String team = extractString(memo, "team");
-        String project = extractString(memo, "project");
-        String scanType = extractString(memo, "scanType");
-        String status = mapTemporalStatus(info.status());
-        
-        return new ScanMetadata(
-            workflowId,
-            info.runId(),
-            team,
-            project,
-            scanType,
-            status,
-            info.durationMs()
-        );
     }
     
     private String extractString(Map<String, Object> map, String key) {

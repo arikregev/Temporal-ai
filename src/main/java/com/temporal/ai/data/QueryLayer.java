@@ -127,32 +127,65 @@ public class QueryLayer {
      * Analyze scan duration from Temporal workflow history
      */
     public ScanDurationAnalysis analyzeScanDuration(String workflowId, String runId) {
-        Optional<ScanMetadata> metadata = Optional.ofNullable(
-            temporalService.extractScanMetadata(workflowId, runId)
-        );
+        Log.info("Analyzing scan duration for workflow: " + workflowId + ", runId: " + runId);
         
-        if (metadata.isEmpty()) {
-            return new ScanDurationAnalysis(workflowId, null, null, "Workflow not found");
+        try {
+            Log.info("Calling TemporalService.extractScanMetadata...");
+            ScanMetadata metadata = temporalService.extractScanMetadata(workflowId, runId);
+            
+            if (metadata.workflowId() == null || metadata.status() == null) {
+                Log.warn("Workflow not found in Temporal: " + workflowId);
+                return new ScanDurationAnalysis(workflowId, runId, null, "Workflow not found in Temporal. Check if workflow ID is correct and Temporal server is accessible.");
+            }
+            
+            Log.info("Workflow found in Temporal. Status: " + metadata.status() + ", Duration: " + metadata.durationMs() + "ms");
+            
+            Long durationMs = metadata.durationMs();
+            
+            // Get workflow history for detailed analysis
+            Log.info("Fetching workflow history for detailed analysis...");
+            var historyOpt = temporalService.getWorkflowHistory(workflowId, runId);
+            
+            String analysis = String.format(
+                "Workflow Status: %s. Duration: %.2f seconds",
+                metadata.status(),
+                durationMs != null ? durationMs / 1000.0 : 0.0
+            );
+            
+            if (historyOpt.isPresent()) {
+                var history = historyOpt.get();
+                long activityCount = history.events().stream()
+                    .filter(e -> e.getEventType() == io.temporal.api.enums.v1.EventType.EVENT_TYPE_ACTIVITY_TASK_SCHEDULED 
+                        || e.getEventType() == io.temporal.api.enums.v1.EventType.EVENT_TYPE_ACTIVITY_TASK_COMPLETED)
+                    .count();
+                analysis += String.format(". Executed %d activities.", activityCount);
+                Log.info("Workflow history analyzed. Activity count: " + activityCount);
+            } else {
+                Log.warn("Could not retrieve workflow history");
+                analysis += ". History details unavailable.";
+            }
+            
+            // Add team/project info if available
+            if (metadata.team() != null) {
+                analysis += " Team: " + metadata.team();
+            }
+            if (metadata.project() != null) {
+                analysis += ", Project: " + metadata.project();
+            }
+            if (metadata.scanType() != null) {
+                analysis += ", Scan Type: " + metadata.scanType();
+            }
+            
+            return new ScanDurationAnalysis(workflowId, runId, durationMs, analysis);
+        } catch (Exception e) {
+            Log.error("Error analyzing scan duration for workflow " + workflowId, e);
+            return new ScanDurationAnalysis(
+                workflowId, 
+                runId, 
+                null, 
+                "Error querying Temporal: " + e.getMessage() + ". Check Temporal server connection."
+            );
         }
-        
-        ScanMetadata scanMetadata = metadata.get();
-        Long durationMs = scanMetadata.durationMs();
-        
-        // Get workflow history for detailed analysis
-        var historyOpt = temporalService.getWorkflowHistory(workflowId, runId);
-        
-        String analysis = "Scan completed in " + (durationMs != null ? durationMs / 1000.0 : 0) + " seconds";
-        
-        if (historyOpt.isPresent()) {
-            var history = historyOpt.get();
-            long activityCount = history.events().stream()
-                .filter(e -> e.getEventType() == io.temporal.api.enums.v1.EventType.EVENT_TYPE_ACTIVITY_TASK_SCHEDULED 
-                    || e.getEventType() == io.temporal.api.enums.v1.EventType.EVENT_TYPE_ACTIVITY_TASK_COMPLETED)
-                .count();
-            analysis += ". Executed " + activityCount + " activities.";
-        }
-        
-        return new ScanDurationAnalysis(workflowId, runId, durationMs, analysis);
     }
     
     /**
