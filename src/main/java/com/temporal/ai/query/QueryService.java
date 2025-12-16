@@ -33,12 +33,12 @@ public class QueryService {
     @Inject
     KnowledgeBaseService knowledgeBaseService;
     
-    private static final Pattern SCAN_ID_PATTERN = Pattern.compile("scan\\s+([a-zA-Z0-9_-]+)", Pattern.CASE_INSENSITIVE);
-    private static final Pattern WORKFLOW_ID_PATTERN = Pattern.compile("workflow\\s+([a-zA-Z0-9_-]+)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern SCAN_ID_PATTERN = Pattern.compile("scan\\s+([a-zA-Z0-9_:-]+)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern WORKFLOW_ID_PATTERN = Pattern.compile("workflow\\s+([a-zA-Z0-9_:-]+)", Pattern.CASE_INSENSITIVE);
     // Pattern to match UUIDs or workflow IDs in various formats
     private static final Pattern UUID_PATTERN = Pattern.compile("([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", Pattern.CASE_INSENSITIVE);
-    // Pattern to match workflow IDs (alphanumeric with dashes/underscores, typically 20+ chars)
-    private static final Pattern WORKFLOW_ID_IN_TEXT_PATTERN = Pattern.compile("([a-zA-Z0-9_-]{20,})", Pattern.CASE_INSENSITIVE);
+    // Pattern to match workflow IDs (alphanumeric with dashes/underscores/colons, typically 20+ chars)
+    private static final Pattern WORKFLOW_ID_IN_TEXT_PATTERN = Pattern.compile("([a-zA-Z0-9_:-]{20,})", Pattern.CASE_INSENSITIVE);
     private static final Pattern TEAM_PATTERN = Pattern.compile("team\\s+(\\w+)", Pattern.CASE_INSENSITIVE);
     private static final Pattern DAYS_PATTERN = Pattern.compile("(\\d+)\\s+days?", Pattern.CASE_INSENSITIVE);
     
