@@ -5,6 +5,10 @@ import com.temporal.ai.data.entity.Finding;
 import com.temporal.ai.data.entity.Scan;
 import com.temporal.ai.data.temporal.TemporalService.ScanMetadata;
 import com.temporal.ai.data.temporal.TemporalService;
+import com.temporal.ai.dependencytrack.DependencyTrackClient;
+import com.temporal.ai.dependencytrack.DependencyTrackClient.Project;
+import com.temporal.ai.dependencytrack.DependencyTrackClient.ProjectMetrics;
+import com.temporal.ai.dependencytrack.DependencyTrackClient.BomUpload;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -26,6 +30,9 @@ public class QueryLayer {
     
     @Inject
     TemporalService temporalService;
+    
+    @Inject
+    DependencyTrackClient dependencyTrackClient;
     
     /**
      * Get scan by ID
@@ -524,4 +531,41 @@ public class QueryLayer {
         String name,
         String error
     ) {}
+    
+    /**
+     * Get project by identifier (name and version)
+     */
+    public Optional<Project> getProjectByIdentifier(String projectId, String version) {
+        Log.info("Looking up Dependency Track project: " + projectId + ":" + version);
+        return dependencyTrackClient.lookupProject(projectId, version);
+    }
+    
+    /**
+     * Get project vulnerabilities/metrics
+     */
+    public Optional<ProjectMetrics> getProjectVulnerabilities(String projectUuid) {
+        try {
+            UUID uuid = UUID.fromString(projectUuid);
+            Log.info("Getting vulnerabilities for Dependency Track project: " + uuid);
+            return dependencyTrackClient.getProjectMetrics(uuid);
+        } catch (IllegalArgumentException e) {
+            Log.warn("Invalid project UUID format: " + projectUuid);
+            return Optional.empty();
+        }
+    }
+    
+    /**
+     * Get last SBOM upload for a project
+     */
+    public Optional<BomUpload> getLastSbomUpload(String projectUuid) {
+        try {
+            UUID uuid = UUID.fromString(projectUuid);
+            Log.info("Getting last SBOM upload for Dependency Track project: " + uuid);
+            List<BomUpload> boms = dependencyTrackClient.getBomHistory(uuid);
+            return boms.isEmpty() ? Optional.empty() : Optional.of(boms.get(0));
+        } catch (IllegalArgumentException e) {
+            Log.warn("Invalid project UUID format: " + projectUuid);
+            return Optional.empty();
+        }
+    }
 }
