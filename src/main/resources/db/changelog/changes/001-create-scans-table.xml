@@ -6,6 +6,11 @@
         http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
 
     <changeSet id="001-create-scans-table" author="temporal-ai">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <tableExists tableName="scans"/>
+            </not>
+        </preConditions>
         <createTable tableName="scans">
             <column name="scan_id" type="UUID">
                 <constraints primaryKey="true" nullable="false"/>
@@ -43,19 +48,19 @@
             </column>
         </createTable>
         
-        <createIndex indexName="idx_scans_team">
+        <createIndex indexName="idx_scans_team" tableName="scans">
             <column name="team"/>
         </createIndex>
         
-        <createIndex indexName="idx_scans_status">
+        <createIndex indexName="idx_scans_status" tableName="scans">
             <column name="status"/>
         </createIndex>
         
-        <createIndex indexName="idx_scans_started_at">
+        <createIndex indexName="idx_scans_started_at" tableName="scans">
             <column name="started_at"/>
         </createIndex>
         
-        <createIndex indexName="idx_scans_workflow_id">
+        <createIndex indexName="idx_scans_workflow_id" tableName="scans">
             <column name="workflow_id"/>
         </createIndex>
     </changeSet>

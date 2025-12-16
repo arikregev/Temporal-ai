@@ -28,7 +28,8 @@ public class KnowledgeBase extends PanacheEntityBase {
     @Column(name = "question_variations", columnDefinition = "jsonb")
     public List<String> questionVariations;
     
-    @Column(name = "context_tags", columnDefinition = "VARCHAR(255)[]")
+    @JdbcTypeCode(SqlTypes.ARRAY)
+    @Column(name = "context_tags", columnDefinition = "TEXT[]")
     public String[] contextTags;
     
     @Column(name = "team", length = 100)

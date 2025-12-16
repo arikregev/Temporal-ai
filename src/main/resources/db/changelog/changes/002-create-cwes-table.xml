@@ -6,6 +6,11 @@
         http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
 
     <changeSet id="002-create-cwes-table" author="temporal-ai">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <tableExists tableName="cwes"/>
+            </not>
+        </preConditions>
         <createTable tableName="cwes">
             <column name="cwe_id" type="VARCHAR(20)">
                 <constraints primaryKey="true" nullable="false"/>
@@ -24,11 +29,11 @@
             </column>
         </createTable>
         
-        <createIndex indexName="idx_cwes_category">
+        <createIndex indexName="idx_cwes_category" tableName="cwes">
             <column name="category"/>
         </createIndex>
         
-        <createIndex indexName="idx_cwes_severity">
+        <createIndex indexName="idx_cwes_severity" tableName="cwes">
             <column name="severity"/>
         </createIndex>
     </changeSet>

@@ -35,14 +35,26 @@ The system consists of six main components:
 
 ### 1. Start Infrastructure Services
 
+**Option A: Using Docker Compose (Recommended)**
+
 ```bash
 docker-compose up -d
 ```
 
 This starts:
-- PostgreSQL database on port 5432
+- PostgreSQL database on port 5432 (user: `temporal`, password: `temporal`, database: `temporal_ai`)
 - Temporal server on port 7233
 - Temporal UI on port 8080
+
+**Option B: Quick Setup Script**
+
+```bash
+./scripts/setup-database.sh
+```
+
+This ensures PostgreSQL is configured correctly with the `temporal` user and `temporal_ai` database.
+
+**Note**: The database user is `temporal` with password `temporal`. Make sure your `application.properties` matches these credentials.
 
 ### 2. Start LLM Service
 

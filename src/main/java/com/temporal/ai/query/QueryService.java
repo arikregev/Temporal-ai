@@ -37,6 +37,36 @@ public class QueryService {
     private static final Pattern DAYS_PATTERN = Pattern.compile("(\\d+)\\s+days?", Pattern.CASE_INSENSITIVE);
     
     /**
+     * Fallback intent classification using pattern matching when LLM is unavailable
+     */
+    private LlmClient.QueryIntent classifyIntentByPattern(String query) {
+        String lowerQuery = query.toLowerCase();
+        
+        if (lowerQuery.contains("duration") || lowerQuery.contains("took") || lowerQuery.contains("time") || 
+            lowerQuery.contains("minutes") || lowerQuery.contains("hours") || lowerQuery.contains("long")) {
+            return new LlmClient.QueryIntent(LlmClient.QueryIntent.IntentType.SCAN_DURATION, query);
+        }
+        if (lowerQuery.contains("change") || lowerQuery.contains("different") || lowerQuery.contains("since") || 
+            lowerQuery.contains("compare") || lowerQuery.contains("between")) {
+            return new LlmClient.QueryIntent(LlmClient.QueryIntent.IntentType.SCAN_CHANGES, query);
+        }
+        if (lowerQuery.contains("cwe") || lowerQuery.contains("top") || lowerQuery.contains("recurring") || 
+            lowerQuery.contains("statistics") || lowerQuery.contains("count") || lowerQuery.contains("trend")) {
+            return new LlmClient.QueryIntent(LlmClient.QueryIntent.IntentType.CWE_STATISTICS, query);
+        }
+        if (lowerQuery.contains("explain") || lowerQuery.contains("what is") || lowerQuery.contains("finding") || 
+            lowerQuery.contains("vulnerability") || lowerQuery.contains("issue")) {
+            return new LlmClient.QueryIntent(LlmClient.QueryIntent.IntentType.FINDING_EXPLANATION, query);
+        }
+        if (lowerQuery.contains("policy") || lowerQuery.contains("rule") || lowerQuery.contains("block") || 
+            lowerQuery.contains("allow") || lowerQuery.contains("enforce")) {
+            return new LlmClient.QueryIntent(LlmClient.QueryIntent.IntentType.POLICY_QUERY, query);
+        }
+        
+        return new LlmClient.QueryIntent(LlmClient.QueryIntent.IntentType.GENERAL, query);
+    }
+    
+    /**
      * Process a natural language query
      */
     public QueryResponse processQuery(String query, String team) {
@@ -55,8 +85,14 @@ public class QueryService {
             );
         }
         
-        // Classify intent using LLM
-        LlmClient.QueryIntent intent = llmClient.classifyIntent(query);
+        // Try to classify intent using LLM, fallback to pattern matching if LLM unavailable
+        LlmClient.QueryIntent intent;
+        try {
+            intent = llmClient.classifyIntent(query);
+        } catch (Exception e) {
+            Log.debug("LLM intent classification unavailable, using pattern matching fallback");
+            intent = classifyIntentByPattern(query);
+        }
         
         // Route to appropriate handler
         return switch (intent.type()) {
@@ -260,14 +296,35 @@ public class QueryService {
             context += "\nContext: Team is " + team;
         }
         
-        String answer = llmClient.generate(context);
-        
-        return new QueryResponse(
-            QueryResponse.ResponseSource.LLM,
-            answer,
-            null,
-            0.8
-        );
+        try {
+            String answer = llmClient.generate(context);
+            
+            // Check if LLM returned an error message
+            if (answer.contains("unavailable") || answer.contains("Error:")) {
+                // Fallback to a basic response
+                return new QueryResponse(
+                    QueryResponse.ResponseSource.QUERY_LAYER,
+                    "I can help you with security analyst queries. Please try asking about: scan duration, scan changes, CWE statistics, or finding explanations.",
+                    null,
+                    0.5
+                );
+            }
+            
+            return new QueryResponse(
+                QueryResponse.ResponseSource.LLM,
+                answer,
+                null,
+                0.8
+            );
+        } catch (Exception e) {
+            Log.debug("LLM generation failed in general query handler, returning fallback response");
+            return new QueryResponse(
+                QueryResponse.ResponseSource.QUERY_LAYER,
+                "I can help you with security analyst queries. Please try asking about: scan duration, scan changes, CWE statistics, or finding explanations.",
+                null,
+                0.5
+            );
+        }
     }
     
     public record QueryResponse(

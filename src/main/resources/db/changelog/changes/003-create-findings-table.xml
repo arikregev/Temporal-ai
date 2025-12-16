@@ -6,6 +6,11 @@
         http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
 
     <changeSet id="003-create-findings-table" author="temporal-ai">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <tableExists tableName="findings"/>
+            </not>
+        </preConditions>
         <createTable tableName="findings">
             <column name="finding_id" type="UUID">
                 <constraints primaryKey="true" nullable="false"/>
@@ -57,23 +62,23 @@
             referencedTableName="cwes"
             referencedColumnNames="cwe_id"/>
         
-        <createIndex indexName="idx_findings_scan_id">
+        <createIndex indexName="idx_findings_scan_id" tableName="findings">
             <column name="scan_id"/>
         </createIndex>
         
-        <createIndex indexName="idx_findings_cwe_id">
+        <createIndex indexName="idx_findings_cwe_id" tableName="findings">
             <column name="cwe_id"/>
         </createIndex>
         
-        <createIndex indexName="idx_findings_severity">
+        <createIndex indexName="idx_findings_severity" tableName="findings">
             <column name="severity"/>
         </createIndex>
         
-        <createIndex indexName="idx_findings_status">
+        <createIndex indexName="idx_findings_status" tableName="findings">
             <column name="status"/>
         </createIndex>
         
-        <createIndex indexName="idx_findings_file_path">
+        <createIndex indexName="idx_findings_file_path" tableName="findings">
             <column name="file_path"/>
         </createIndex>
     </changeSet>

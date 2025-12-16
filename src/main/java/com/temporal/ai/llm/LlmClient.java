@@ -35,8 +35,11 @@ public class LlmClient {
     
     @jakarta.annotation.PostConstruct
     void init() {
+        // Ensure base URL doesn't have trailing slash
+        String cleanBaseUrl = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
+        Log.info("Initializing Ollama REST client - Base URL: " + cleanBaseUrl + ", Model: " + model);
         ollamaApi = QuarkusRestClientBuilder.newBuilder()
-            .baseUri(URI.create(baseUrl))
+            .baseUri(URI.create(cleanBaseUrl))
             .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
             .readTimeout(timeout, java.util.concurrent.TimeUnit.MILLISECONDS)
             .build(OllamaApi.class);
@@ -64,11 +67,23 @@ public class LlmClient {
                 request.options = Map.of("temperature", parameters.get("temperature"));
             }
             
+            Log.debug("Calling Ollama API - URL: " + baseUrl + "/api/generate, Model: " + model);
             OllamaResponse response = ollamaApi.generate(request);
+            Log.debug("Ollama API response received successfully");
             return response.response != null ? response.response : "";
         } catch (Exception e) {
-            Log.error("Error generating LLM response", e);
-            throw new LlmException("Failed to generate LLM response: " + e.getMessage(), e);
+            Log.warn("LLM generation failed - Base URL: " + baseUrl + ", Endpoint: /api/generate, Error: " + e.getMessage());
+            // Return a default response instead of throwing - allows graceful degradation
+            String errorMsg = String.format(
+                "I'm sorry, the LLM service is currently unavailable. " +
+                "Please ensure Ollama is running at %s. " +
+                "Attempted endpoint: %s/api/generate. " +
+                "Error: %s", 
+                baseUrl,
+                baseUrl,
+                e.getMessage()
+            );
+            return errorMsg;
         }
     }
     
@@ -81,11 +96,14 @@ public class LlmClient {
             request.model = model;
             request.prompt = text;
             
+            Log.debug("Calling Ollama API for embeddings - URL: " + baseUrl + "/api/embeddings, Model: " + model);
             OllamaEmbeddingResponse response = ollamaApi.generateEmbedding(request);
+            Log.debug("Ollama embeddings API response received successfully");
             return response.embedding != null ? response.embedding : List.of();
         } catch (Exception e) {
-            Log.error("Error generating embedding", e);
-            throw new LlmException("Failed to generate embedding: " + e.getMessage(), e);
+            Log.warn("Embedding generation failed - Base URL: " + baseUrl + ", Endpoint: /api/embeddings, Error: " + e.getMessage());
+            // Return empty list instead of throwing - allows fallback to keyword search
+            return List.of();
         }
     }
     
@@ -93,45 +111,58 @@ public class LlmClient {
      * Classify query intent
      */
     public QueryIntent classifyIntent(String query) {
-        String prompt = String.format("""
-            Classify the following security analyst query into one of these categories:
-            - SCAN_DURATION: Questions about why a scan took a certain amount of time
-            - SCAN_CHANGES: Questions about what changed between scans
-            - CWE_STATISTICS: Questions about CWE counts, trends, or statistics
-            - FINDING_EXPLANATION: Questions asking to explain a specific finding
-            - POLICY_QUERY: Questions about policies or policy creation
-            - GENERAL: Other questions
+        try {
+            String prompt = String.format("""
+                Classify the following security analyst query into one of these categories:
+                - SCAN_DURATION: Questions about why a scan took a certain amount of time
+                - SCAN_CHANGES: Questions about what changed between scans
+                - CWE_STATISTICS: Questions about CWE counts, trends, or statistics
+                - FINDING_EXPLANATION: Questions asking to explain a specific finding
+                - POLICY_QUERY: Questions about policies or policy creation
+                - GENERAL: Other questions
+                
+                Query: %s
+                
+                Respond with only the category name.
+                """, query);
             
-            Query: %s
+            String response = generate(prompt);
             
-            Respond with only the category name.
-            """, query);
-        
-        String response = generate(prompt);
-        String category = response.trim().toUpperCase();
-        
-        // Map response to intent
-        QueryIntent.IntentType intentType = switch (category) {
-            case "SCAN_DURATION" -> QueryIntent.IntentType.SCAN_DURATION;
-            case "SCAN_CHANGES" -> QueryIntent.IntentType.SCAN_CHANGES;
-            case "CWE_STATISTICS" -> QueryIntent.IntentType.CWE_STATISTICS;
-            case "FINDING_EXPLANATION" -> QueryIntent.IntentType.FINDING_EXPLANATION;
-            case "POLICY_QUERY" -> QueryIntent.IntentType.POLICY_QUERY;
-            default -> QueryIntent.IntentType.GENERAL;
-        };
-        
-        return new QueryIntent(intentType, query);
+            // If LLM returned error message, throw exception to trigger fallback
+            if (response.contains("unavailable") || response.contains("error") || 
+                response.contains("LLM service")) {
+                throw new LlmException("LLM service unavailable", null);
+            }
+            
+            String category = response.trim().toUpperCase();
+            
+            // Map response to intent
+            QueryIntent.IntentType intentType = switch (category) {
+                case "SCAN_DURATION" -> QueryIntent.IntentType.SCAN_DURATION;
+                case "SCAN_CHANGES" -> QueryIntent.IntentType.SCAN_CHANGES;
+                case "CWE_STATISTICS" -> QueryIntent.IntentType.CWE_STATISTICS;
+                case "FINDING_EXPLANATION" -> QueryIntent.IntentType.FINDING_EXPLANATION;
+                case "POLICY_QUERY" -> QueryIntent.IntentType.POLICY_QUERY;
+                default -> QueryIntent.IntentType.GENERAL;
+            };
+            
+            return new QueryIntent(intentType, query);
+        } catch (Exception e) {
+            // Log at debug level since fallback will handle it
+            Log.debug("LLM intent classification unavailable, pattern matching will be used");
+            throw new LlmException("Failed to classify intent: " + e.getMessage(), e);
+        }
     }
     
-    @Path("/api/generate")
     @Produces(MediaType.APPLICATION_JSON)
     @Consumes(MediaType.APPLICATION_JSON)
     public interface OllamaApi {
         @POST
+        @Path("/api/generate")
         OllamaResponse generate(OllamaRequest request);
         
         @POST
-        @Path("/embed")
+        @Path("/api/embeddings")
         OllamaEmbeddingResponse generateEmbedding(OllamaEmbeddingRequest request);
     }
     
@@ -158,6 +189,7 @@ public class LlmClient {
     
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class OllamaEmbeddingResponse {
+        @JsonProperty("embedding")
         public List<Double> embedding;
     }
     

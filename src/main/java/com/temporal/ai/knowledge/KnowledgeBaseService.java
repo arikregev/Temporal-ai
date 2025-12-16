@@ -88,32 +88,84 @@ public class KnowledgeBaseService {
      * Find matching Q&A pairs using semantic search
      */
     public List<KnowledgeBaseMatch> findMatchingAnswers(String query, String team, int limit) {
-        // Generate embedding for the query
-        List<Double> queryEmbedding = llmClient.generateEmbedding(query);
-        
-        // Get all active knowledge base entries
+        try {
+            // Generate embedding for the query
+            List<Double> queryEmbedding = llmClient.generateEmbedding(query);
+            
+            if (queryEmbedding == null || queryEmbedding.isEmpty()) {
+                Log.debug("Embeddings unavailable, using keyword search fallback");
+                return findMatchingAnswersByKeyword(query, team, limit);
+            }
+            
+            // Get all active knowledge base entries
+            List<KnowledgeBase> allEntries = KnowledgeBase.find("isActive = true").list();
+            
+            // Filter by team if specified
+            if (team != null && !team.isEmpty()) {
+                allEntries = allEntries.stream()
+                    .filter(kb -> team.equals(kb.team) || kb.team == null)
+                    .collect(Collectors.toList());
+            }
+            
+            // Calculate similarity scores
+            List<KnowledgeBaseMatch> matches = new ArrayList<>();
+            for (KnowledgeBase kb : allEntries) {
+                List<Double> kbEmbedding = getEmbeddingForKb(kb);
+                if (kbEmbedding != null && !kbEmbedding.isEmpty()) {
+                    double similarity = cosineSimilarity(queryEmbedding, kbEmbedding);
+                    if (similarity >= SIMILARITY_THRESHOLD) {
+                        matches.add(new KnowledgeBaseMatch(kb, similarity));
+                    }
+                }
+            }
+            
+            // Sort by similarity descending and limit
+            return matches.stream()
+                .sorted((a, b) -> Double.compare(b.similarity(), a.similarity()))
+                .limit(limit)
+                .collect(Collectors.toList());
+        } catch (Exception e) {
+            Log.debug("Semantic search unavailable, using keyword search fallback");
+            return findMatchingAnswersByKeyword(query, team, limit);
+        }
+    }
+    
+    /**
+     * Fallback keyword-based search when embeddings are not available
+     */
+    private List<KnowledgeBaseMatch> findMatchingAnswersByKeyword(String query, String team, int limit) {
+        String lowerQuery = query.toLowerCase();
         List<KnowledgeBase> allEntries = KnowledgeBase.find("isActive = true").list();
         
-        // Filter by team if specified
         if (team != null && !team.isEmpty()) {
             allEntries = allEntries.stream()
                 .filter(kb -> team.equals(kb.team) || kb.team == null)
                 .collect(Collectors.toList());
         }
         
-        // Calculate similarity scores
         List<KnowledgeBaseMatch> matches = new ArrayList<>();
         for (KnowledgeBase kb : allEntries) {
-            List<Double> kbEmbedding = getEmbeddingForKb(kb);
-            if (kbEmbedding != null && !kbEmbedding.isEmpty()) {
-                double similarity = cosineSimilarity(queryEmbedding, kbEmbedding);
-                if (similarity >= SIMILARITY_THRESHOLD) {
+            String question = kb.question != null ? kb.question.toLowerCase() : "";
+            String answer = kb.answer != null ? kb.answer.toLowerCase() : "";
+            
+            // Simple keyword matching - count how many query words appear
+            String[] queryWords = lowerQuery.split("\\s+");
+            int matchCount = 0;
+            for (String word : queryWords) {
+                if (question.contains(word) || answer.contains(word)) {
+                    matchCount++;
+                }
+            }
+            
+            if (matchCount > 0) {
+                // Use match ratio as similarity score
+                double similarity = (double) matchCount / queryWords.length;
+                if (similarity >= 0.3) { // Lower threshold for keyword matching
                     matches.add(new KnowledgeBaseMatch(kb, similarity));
                 }
             }
         }
         
-        // Sort by similarity descending and limit
         return matches.stream()
             .sorted((a, b) -> Double.compare(b.similarity(), a.similarity()))
             .limit(limit)

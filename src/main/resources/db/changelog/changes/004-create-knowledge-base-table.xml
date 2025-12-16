@@ -6,6 +6,11 @@
         http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
 
     <changeSet id="004-create-knowledge-base-table" author="temporal-ai">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <tableExists tableName="knowledge_base"/>
+            </not>
+        </preConditions>
         <createTable tableName="knowledge_base">
             <column name="kb_id" type="UUID">
                 <constraints primaryKey="true" nullable="false"/>
@@ -17,7 +22,7 @@
                 <constraints nullable="false"/>
             </column>
             <column name="question_variations" type="JSONB"/>
-            <column name="context_tags" type="VARCHAR(255)[]"/>
+            <column name="context_tags" type="TEXT[]"/>
             <column name="team" type="VARCHAR(100)"/>
             <column name="project" type="VARCHAR(255)"/>
             <column name="created_by" type="VARCHAR(255)">
@@ -46,23 +51,23 @@
             <column name="approved_at" type="TIMESTAMP"/>
         </createTable>
         
-        <createIndex indexName="idx_kb_team">
+        <createIndex indexName="idx_kb_team" tableName="knowledge_base">
             <column name="team"/>
         </createIndex>
         
-        <createIndex indexName="idx_kb_is_active">
+        <createIndex indexName="idx_kb_is_active" tableName="knowledge_base">
             <column name="is_active"/>
         </createIndex>
         
-        <createIndex indexName="idx_kb_approval_status">
+        <createIndex indexName="idx_kb_approval_status" tableName="knowledge_base">
             <column name="approval_status"/>
         </createIndex>
         
-        <createIndex indexName="idx_kb_created_at">
+        <createIndex indexName="idx_kb_created_at" tableName="knowledge_base">
             <column name="created_at"/>
         </createIndex>
         
-        <createIndex indexName="idx_kb_usage_count">
+        <createIndex indexName="idx_kb_usage_count" tableName="knowledge_base">
             <column name="usage_count"/>
         </createIndex>
     </changeSet>
