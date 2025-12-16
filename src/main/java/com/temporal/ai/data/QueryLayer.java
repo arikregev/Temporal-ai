@@ -14,6 +14,7 @@ import jakarta.transaction.Transactional;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -315,38 +316,57 @@ public class QueryLayer {
                 analysis.append(String.format("Activities: %d scheduled, %d completed, %d failed\n", 
                     activityScheduled, activityCompleted, activityFailed));
                 
-                // Extract failed activities
+                // Build a map of scheduled event IDs to activity names for quick lookup
+                Map<Long, String> scheduledActivityMap = new java.util.HashMap<>();
+                for (var event : events) {
+                    if (event.getEventType() == io.temporal.api.enums.v1.EventType.EVENT_TYPE_ACTIVITY_TASK_SCHEDULED) {
+                        var scheduledAttrs = event.getActivityTaskScheduledEventAttributes();
+                        if (scheduledAttrs != null && scheduledAttrs.getActivityType() != null) {
+                            scheduledActivityMap.put(event.getEventId(), scheduledAttrs.getActivityType().getName());
+                        }
+                    }
+                }
+                
+                // Extract failed activities with detailed error information
                 for (var event : events) {
                     if (event.getEventType() == io.temporal.api.enums.v1.EventType.EVENT_TYPE_ACTIVITY_TASK_FAILED) {
                         var failedEvent = event.getActivityTaskFailedEventAttributes();
                         if (failedEvent != null) {
-                            // Get activity type from scheduled event (need to look back)
-                            String activityName = "Unknown Activity";
-                            // Try to find the corresponding scheduled event
-                            for (var prevEvent : events) {
-                                if (prevEvent.getEventId() < event.getEventId() &&
-                                    prevEvent.getEventType() == io.temporal.api.enums.v1.EventType.EVENT_TYPE_ACTIVITY_TASK_SCHEDULED) {
-                                    var scheduledAttrs = prevEvent.getActivityTaskScheduledEventAttributes();
-                                    if (scheduledAttrs != null && scheduledAttrs.getActivityType() != null) {
-                                        activityName = scheduledAttrs.getActivityType().getName();
-                                        break;
-                                    }
-                                }
-                            }
+                            // Get activity name from scheduled event using scheduled event ID
+                            String activityName = scheduledActivityMap.getOrDefault(
+                                failedEvent.getScheduledEventId(), "Unknown Activity");
                             
-                            String error = failedEvent.getFailure() != null ? 
-                                (failedEvent.getFailure().getMessage() != null ? 
-                                    failedEvent.getFailure().getMessage() : 
-                                    failedEvent.getFailure().toString()) : "Unknown error";
+                            String error = failedEvent.hasFailure() ? 
+                                extractDetailedFailureInfo(failedEvent.getFailure()) : 
+                                "Failure details unavailable";
+                            
                             failedActivities.add(new FailedActivity(activityName, error));
+                            Log.info("Found failed activity: " + activityName + " - Error: " + error);
                         }
                     }
                     
                     if (event.getEventType() == io.temporal.api.enums.v1.EventType.EVENT_TYPE_WORKFLOW_EXECUTION_FAILED) {
                         var failedEvent = event.getWorkflowExecutionFailedEventAttributes();
-                        if (failedEvent != null && failedEvent.getFailure() != null) {
-                            errorMessage = failedEvent.getFailure().getMessage();
-                            analysis.append(String.format("Workflow Failure: %s\n", errorMessage));
+                        if (failedEvent != null && failedEvent.hasFailure()) {
+                            errorMessage = extractDetailedFailureInfo(failedEvent.getFailure());
+                            analysis.append(String.format("\n=== Workflow Failure ===\n%s\n", errorMessage));
+                            Log.info("Workflow failed with error: " + errorMessage);
+                        }
+                    }
+                    
+                    // Extract activity task timeout failures
+                    if (event.getEventType() == io.temporal.api.enums.v1.EventType.EVENT_TYPE_ACTIVITY_TASK_TIMED_OUT) {
+                        var timeoutEvent = event.getActivityTaskTimedOutEventAttributes();
+                        if (timeoutEvent != null) {
+                            // Get activity name from scheduled event map
+                            String activityName = scheduledActivityMap.getOrDefault(
+                                timeoutEvent.getScheduledEventId(), "Unknown Activity");
+                            String timeoutError = "Activity timed out. " + 
+                                (timeoutEvent.hasFailure() ? 
+                                    extractDetailedFailureInfo(timeoutEvent.getFailure()) : 
+                                    "Timeout details unavailable");
+                            failedActivities.add(new FailedActivity(activityName, timeoutError));
+                            Log.info("Found timed out activity: " + activityName);
                         }
                     }
                 }
@@ -378,6 +398,22 @@ public class QueryLayer {
                 analysis.append(String.format("Scan Type: %s\n", metadata.scanType()));
             }
             
+            // Enhance analysis with failure summary if there are failures
+            if (!failedActivities.isEmpty() || errorMessage != null) {
+                analysis.append("\n=== Failure Analysis ===\n");
+                if (errorMessage != null) {
+                    analysis.append("Workflow Error: ").append(errorMessage).append("\n");
+                }
+                if (!failedActivities.isEmpty()) {
+                    analysis.append("Failed Activities:\n");
+                    for (int i = 0; i < failedActivities.size(); i++) {
+                        var activity = failedActivities.get(i);
+                        analysis.append(String.format("%d. %s\n   Error: %s\n", 
+                            i + 1, activity.name(), activity.error()));
+                    }
+                }
+            }
+            
             return new WorkflowResults(
                 workflowId,
                 metadata.runId(),
@@ -399,6 +435,79 @@ public class QueryLayer {
                 null
             );
         }
+    }
+    
+    /**
+     * Extract detailed failure information from Temporal Failure protobuf object
+     */
+    private String extractDetailedFailureInfo(io.temporal.api.failure.v1.Failure failure) {
+        if (failure == null) {
+            return "No failure details available";
+        }
+        
+        StringBuilder errorDetails = new StringBuilder();
+        
+        // Get main error message
+        String message = failure.getMessage();
+        if (message != null && !message.isEmpty()) {
+            errorDetails.append("Error: ").append(message).append("\n");
+        }
+        
+        // Get stack trace
+        String stackTrace = failure.getStackTrace();
+        if (stackTrace != null && !stackTrace.isEmpty()) {
+            errorDetails.append("Stack Trace:\n").append(stackTrace).append("\n");
+        }
+        
+        // Get cause if available
+        if (failure.hasCause()) {
+            io.temporal.api.failure.v1.Failure cause = failure.getCause();
+            String causeMessage = cause.getMessage();
+            if (causeMessage != null && !causeMessage.isEmpty()) {
+                errorDetails.append("Caused by: ").append(causeMessage).append("\n");
+            }
+        }
+        
+        // Get application failure details if available
+        if (failure.hasApplicationFailureInfo()) {
+            var appFailure = failure.getApplicationFailureInfo();
+            String type = appFailure.getType();
+            if (type != null && !type.isEmpty()) {
+                errorDetails.append("Failure Type: ").append(type).append("\n");
+            }
+            if (appFailure.getNonRetryable()) {
+                errorDetails.append("Non-retryable failure\n");
+            }
+            // Get details if available
+            if (appFailure.hasDetails()) {
+                errorDetails.append("Details: ").append(appFailure.getDetails().toString()).append("\n");
+            }
+        }
+        
+        // Get timeout failure details if available
+        if (failure.hasTimeoutFailureInfo()) {
+            var timeoutFailure = failure.getTimeoutFailureInfo();
+            errorDetails.append("Timeout Type: ").append(timeoutFailure.getTimeoutType()).append("\n");
+            if (timeoutFailure.hasLastHeartbeatDetails()) {
+                errorDetails.append("Last Heartbeat: ").append(timeoutFailure.getLastHeartbeatDetails().toString()).append("\n");
+            }
+        }
+        
+        // Get canceled failure details if available
+        if (failure.hasCanceledFailureInfo()) {
+            var canceledFailure = failure.getCanceledFailureInfo();
+            errorDetails.append("Canceled failure\n");
+            if (canceledFailure.hasDetails()) {
+                errorDetails.append("Cancelation Details: ").append(canceledFailure.getDetails().toString()).append("\n");
+            }
+        }
+        
+        // If no details extracted, use toString
+        if (errorDetails.length() == 0) {
+            errorDetails.append(failure.toString());
+        }
+        
+        return errorDetails.toString().trim();
     }
     
     public record WorkflowResults(
