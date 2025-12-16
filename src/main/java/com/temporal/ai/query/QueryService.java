@@ -208,8 +208,8 @@ public class QueryService {
             Log.info("No pattern match found, trying LLM extraction");
             try {
                 String extracted = llmClient.generate(
-                    "Extract the workflow ID or scan ID from this query: " + query + 
-                    "\nRespond with only the ID, nothing else. If no ID found, respond with 'NONE'."
+                    "Extract the workflow ID or scan ID in format XXXX:XXXX from this query: " + query +
+                    "\nRespond with only the ID, nothing else. No comments. If no ID found, respond with 'NONE'."
                 );
                 String trimmed = extracted.trim();
                 if (!trimmed.equalsIgnoreCase("NONE") && !trimmed.isEmpty() && 
@@ -481,8 +481,8 @@ public class QueryService {
                 // Try LLM extraction
                 try {
                     String extracted = llmClient.generate(
-                        "Extract the workflow ID or run ID from this query: " + query + 
-                        "\nRespond with only the ID, nothing else. If no ID found, respond with 'NONE'."
+                            "Extract the workflow ID or scan ID in format XXXX:XXXX from this query: " + query +
+                                    "\nRespond with only the ID, nothing else. No comments. If no ID found, respond with 'NONE'."
                     );
                     String trimmed = extracted.trim();
                     if (!trimmed.equalsIgnoreCase("NONE") && !trimmed.isEmpty() && 
