@@ -120,7 +120,7 @@ public class LlmClient {
                 - FINDING_EXPLANATION: Questions asking to explain a specific finding
                 - POLICY_QUERY: Questions about policies or policy creation
                 - GENERAL: Other questions
-                
+                - WORKFLOW_RESULTS: Questions regarding the results / outcome of a workflow
                 Query: %s
                 
                 Respond with only the category name.
@@ -143,6 +143,7 @@ public class LlmClient {
                 case "CWE_STATISTICS" -> QueryIntent.IntentType.CWE_STATISTICS;
                 case "FINDING_EXPLANATION" -> QueryIntent.IntentType.FINDING_EXPLANATION;
                 case "POLICY_QUERY" -> QueryIntent.IntentType.POLICY_QUERY;
+                case "WORKFLOW_RESULTS" -> QueryIntent.IntentType.WORKFLOW_RESULTS;
                 default -> QueryIntent.IntentType.GENERAL;
             };
             
@@ -200,6 +201,7 @@ public class LlmClient {
             CWE_STATISTICS,
             FINDING_EXPLANATION,
             POLICY_QUERY,
+            WORKFLOW_RESULTS,
             GENERAL
         }
     }

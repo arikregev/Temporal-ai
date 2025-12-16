@@ -4,6 +4,8 @@ import com.temporal.ai.data.QueryLayer;
 import com.temporal.ai.data.QueryLayer.CweStatistics;
 import com.temporal.ai.data.QueryLayer.ScanComparison;
 import com.temporal.ai.data.QueryLayer.ScanDurationAnalysis;
+import com.temporal.ai.data.QueryLayer.WorkflowResults;
+import com.temporal.ai.data.QueryLayer.FailedActivity;
 import com.temporal.ai.knowledge.KnowledgeBaseService.KnowledgeBaseMatch;
 import com.temporal.ai.knowledge.KnowledgeBaseService;
 import com.temporal.ai.llm.LlmClient;
@@ -51,15 +53,22 @@ public class QueryService {
             UUID_PATTERN.matcher(query).find() ||
             WORKFLOW_ID_IN_TEXT_PATTERN.matcher(query).find() ||
             lowerQuery.contains("workflow") || lowerQuery.contains("scan")) {
+            // Check for workflow results queries (what happened, why failed, status)
+            if (lowerQuery.contains("what happened") || lowerQuery.contains("why did") || 
+                lowerQuery.contains("why failed") || lowerQuery.contains("failed") ||
+                lowerQuery.contains("last workflow") || lowerQuery.contains("workflow status") ||
+                lowerQuery.contains("workflow result") || lowerQuery.contains("what went wrong")) {
+                return new LlmClient.QueryIntent(LlmClient.QueryIntent.IntentType.WORKFLOW_RESULTS, query);
+            }
             // If it mentions duration/time with workflow, it's a duration query
             if (lowerQuery.contains("duration") || lowerQuery.contains("took") || 
                 lowerQuery.contains("time") || lowerQuery.contains("minutes") || 
                 lowerQuery.contains("hours") || lowerQuery.contains("long") ||
-                lowerQuery.contains("why") || lowerQuery.contains("how long")) {
+                lowerQuery.contains("how long")) {
                 return new LlmClient.QueryIntent(LlmClient.QueryIntent.IntentType.SCAN_DURATION, query);
             }
-            // If it mentions workflow/scan, treat as workflow query (will be handled specially)
-            return new LlmClient.QueryIntent(LlmClient.QueryIntent.IntentType.SCAN_DURATION, query);
+            // If it mentions workflow/scan without specific intent, treat as workflow results
+            return new LlmClient.QueryIntent(LlmClient.QueryIntent.IntentType.WORKFLOW_RESULTS, query);
         }
         
         if (lowerQuery.contains("duration") || lowerQuery.contains("took") || lowerQuery.contains("time") || 
@@ -121,6 +130,7 @@ public class QueryService {
             case CWE_STATISTICS -> handleCweStatisticsQuery(query, team);
             case FINDING_EXPLANATION -> handleFindingExplanationQuery(query);
             case POLICY_QUERY -> handlePolicyQuery(query);
+            case WORKFLOW_RESULTS -> handleWorkflowResultsQuery(query, team);
             default -> handleGeneralQuery(query, team);
         };
     }
@@ -385,6 +395,185 @@ public class QueryService {
             null,
             1.0
         );
+    }
+    
+    private QueryResponse handleWorkflowResultsQuery(String query, String team) {
+        Log.info("Handling workflow results query: " + query);
+        
+        String workflowId = null;
+        String runId = null;
+        
+        String lowerQuery = query.toLowerCase();
+        
+        // Check if asking about "last workflow"
+        if (lowerQuery.contains("last workflow") || lowerQuery.contains("last flow")) {
+            Log.info("Query is about last workflow");
+            
+            // Get the latest workflow for the team
+            if (team != null && !team.isEmpty()) {
+                var latestScan = queryLayer.getLatestScanByTeam(team);
+                if (latestScan.isPresent()) {
+                    workflowId = latestScan.get().workflowId;
+                    runId = latestScan.get().runId;
+                    Log.info("Found latest workflow for team " + team + ": " + workflowId);
+                } else {
+                    return new QueryResponse(
+                        QueryResponse.ResponseSource.QUERY_LAYER,
+                        "No workflows found for team: " + team,
+                        null,
+                        0.5
+                    );
+                }
+            } else {
+                // Get latest workflow across all teams
+                var latestScans = queryLayer.getScansByStatus("COMPLETED", 1);
+                if (latestScans.isEmpty()) {
+                    latestScans = queryLayer.getScansByStatus("FAILED", 1);
+                }
+                if (!latestScans.isEmpty()) {
+                    workflowId = latestScans.get(0).workflowId;
+                    runId = latestScans.get(0).runId;
+                    Log.info("Found latest workflow: " + workflowId);
+                } else {
+                    return new QueryResponse(
+                        QueryResponse.ResponseSource.QUERY_LAYER,
+                        "No workflows found in the system.",
+                        null,
+                        0.5
+                    );
+                }
+            }
+        } else {
+            // Extract workflow ID from query
+            Matcher workflowMatcher = WORKFLOW_ID_PATTERN.matcher(query);
+            Matcher uuidMatcher = UUID_PATTERN.matcher(query);
+            Matcher workflowIdMatcher = WORKFLOW_ID_IN_TEXT_PATTERN.matcher(query);
+            
+            if (workflowMatcher.find()) {
+                workflowId = workflowMatcher.group(1);
+                Log.info("Extracted workflow ID from pattern: " + workflowId);
+            } else if (uuidMatcher.find()) {
+                String uuidStr = uuidMatcher.group(1);
+                // Try as scan ID first
+                try {
+                    UUID scanId = UUID.fromString(uuidStr);
+                    var scanOpt = queryLayer.getScanById(scanId);
+                    if (scanOpt.isPresent()) {
+                        workflowId = scanOpt.get().workflowId;
+                        runId = scanOpt.get().runId;
+                        Log.info("Found workflow ID from scan UUID: " + workflowId);
+                    } else {
+                        workflowId = uuidStr;
+                    }
+                } catch (IllegalArgumentException e) {
+                    workflowId = uuidStr;
+                }
+            } else if (workflowIdMatcher.find()) {
+                String potentialId = workflowIdMatcher.group(1);
+                var scanOpt = queryLayer.getScanByWorkflowId(potentialId);
+                if (scanOpt.isPresent()) {
+                    workflowId = potentialId;
+                    runId = scanOpt.get().runId;
+                } else {
+                    workflowId = potentialId;
+                }
+            } else {
+                // Try LLM extraction
+                try {
+                    String extracted = llmClient.generate(
+                        "Extract the workflow ID or run ID from this query: " + query + 
+                        "\nRespond with only the ID, nothing else. If no ID found, respond with 'NONE'."
+                    );
+                    String trimmed = extracted.trim();
+                    if (!trimmed.equalsIgnoreCase("NONE") && !trimmed.isEmpty() && 
+                        !trimmed.contains("unavailable") && !trimmed.contains("error")) {
+                        workflowId = trimmed;
+                    }
+                } catch (Exception e) {
+                    Log.debug("LLM extraction failed: " + e.getMessage());
+                }
+            }
+        }
+        
+        if (workflowId == null || workflowId.isEmpty()) {
+            return new QueryResponse(
+                QueryResponse.ResponseSource.LLM,
+                "Could not identify workflow ID from the query. Please provide a workflow ID or ask about 'last workflow'.",
+                null,
+                0.0
+            );
+        }
+        
+        Log.info("Querying Temporal for workflow results: " + workflowId + ", runId: " + runId);
+        WorkflowResults results = queryLayer.analyzeWorkflowResults(workflowId, runId);
+        
+        // Generate answer using LLM with workflow history context
+        String answer;
+        try {
+            String context = String.format(
+                "Workflow ID: %s\nRun ID: %s\nStatus: %s\nDuration: %s\n\nWorkflow History Analysis:\n%s\n\nError Details:\n%s\n\n",
+                results.workflowId(),
+                results.runId() != null ? results.runId() : "N/A",
+                results.status(),
+                results.durationMs() != null ? (results.durationMs() / 1000.0) + " seconds" : "N/A",
+                results.analysis(),
+                results.errorMessage() != null ? results.errorMessage() : "No errors"
+            );
+            
+            String prompt = String.format(
+                "Based on the following workflow execution details, answer this question: %s\n\n%s\n\n" +
+                "Provide a clear, technical explanation of what happened in this workflow. " +
+                "If the workflow failed, explain why it failed based on the error details and history.",
+                query,
+                context
+            );
+            
+            answer = llmClient.generate(prompt);
+            
+            // Check if LLM returned error
+            if (answer.contains("unavailable") || answer.contains("Error:")) {
+                answer = formatWorkflowResultsAnswer(results, query);
+            }
+        } catch (Exception e) {
+            Log.debug("LLM generation failed, using formatted answer");
+            answer = formatWorkflowResultsAnswer(results, query);
+        }
+        
+        return new QueryResponse(
+            QueryResponse.ResponseSource.QUERY_LAYER,
+            answer,
+            results,
+            1.0
+        );
+    }
+    
+    private String formatWorkflowResultsAnswer(WorkflowResults results, String query) {
+        StringBuilder answer = new StringBuilder();
+        
+        answer.append(String.format("Workflow: %s\n", results.workflowId()));
+        if (results.runId() != null) {
+            answer.append(String.format("Run ID: %s\n", results.runId()));
+        }
+        answer.append(String.format("Status: %s\n", results.status()));
+        
+        if (results.durationMs() != null) {
+            answer.append(String.format("Duration: %.2f seconds\n", results.durationMs() / 1000.0));
+        }
+        
+        answer.append("\n").append(results.analysis());
+        
+        if (results.errorMessage() != null && !results.errorMessage().isEmpty()) {
+            answer.append("\n\nError: ").append(results.errorMessage());
+        }
+        
+        if (results.failedActivities() != null && !results.failedActivities().isEmpty()) {
+            answer.append("\n\nFailed Activities:\n");
+            results.failedActivities().forEach(activity -> 
+                answer.append(String.format("- %s: %s\n", activity.name(), activity.error()))
+            );
+        }
+        
+        return answer.toString();
     }
     
     private QueryResponse handleGeneralQuery(String query, String team) {
