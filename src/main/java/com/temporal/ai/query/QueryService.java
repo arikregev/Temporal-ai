@@ -633,7 +633,7 @@ public class QueryService {
         String lowerQuery = query.toLowerCase();
         
         // Determine what information to fetch based on query
-        if (lowerQuery.contains("vulnerabilit") && (lowerQuery.contains("how many") || lowerQuery.contains("count"))) {
+        /*if (lowerQuery.contains("vulnerabilit") && (lowerQuery.contains("how many") || lowerQuery.contains("count"))) {
             return handleVulnerabilityCountQuery(project, query);
         } else if (lowerQuery.contains("severity") || lowerQuery.contains("highest") || lowerQuery.contains("critical") || 
                    lowerQuery.contains("high") || lowerQuery.contains("medium") || lowerQuery.contains("low")) {
@@ -643,7 +643,8 @@ public class QueryService {
         } else {
             // General project query - return comprehensive info
             return handleGeneralDependencyTrackQuery(project, query);
-        }
+        }*/
+        return handleGeneralDependencyTrackQuery(project, query);
     }
     
     private QueryResponse handleVulnerabilityCountQuery(Project project, String query) {
@@ -791,6 +792,10 @@ public class QueryService {
     
     private QueryResponse handleSbomQuery(Project project, String query) {
         List<BomUpload> boms = dependencyTrackClient.getBomHistory(project.uuid());
+        // Sort by imported date descending when available
+        boms = boms.stream()
+            .sorted((a, b) -> parseInstantSafe(b.imported()).compareTo(parseInstantSafe(a.imported())))
+            .toList();
         
         String lowerQuery = query.toLowerCase();
         if (lowerQuery.contains("last") || lowerQuery.contains("when")) {
@@ -864,7 +869,9 @@ public class QueryService {
     
     private QueryResponse handleGeneralDependencyTrackQuery(Project project, String query) {
         Optional<ProjectMetrics> metricsOpt = dependencyTrackClient.getProjectMetrics(project.uuid());
-        List<BomUpload> boms = dependencyTrackClient.getBomHistory(project.uuid());
+        /*List<BomUpload> boms = dependencyTrackClient.getBomHistory(project.uuid()).stream()
+            .sorted((a, b) -> parseInstantSafe(b.imported()).compareTo(parseInstantSafe(a.imported())))
+            .toList();*/
         
         StringBuilder answer = new StringBuilder();
         answer.append(String.format("Project: %s\nVersion: %s\n", project.name(), project.version()));
@@ -875,6 +882,7 @@ public class QueryService {
         
         if (metricsOpt.isPresent()) {
             ProjectMetrics metrics = metricsOpt.get();
+            answer.append(String.format("Number of components: %d\n", metrics.components()));
             answer.append(String.format("\nVulnerability Summary:\n"));
             answer.append(String.format("- Total: %d\n", metrics.vulnerabilities() != null ? metrics.vulnerabilities() : 0));
             answer.append(String.format("- Critical: %d\n", metrics.critical() != null ? metrics.critical() : 0));
@@ -882,18 +890,18 @@ public class QueryService {
             answer.append(String.format("- Medium: %d\n", metrics.medium() != null ? metrics.medium() : 0));
             answer.append(String.format("- Low: %d\n", metrics.low() != null ? metrics.low() : 0));
         }
-        
-        if (!boms.isEmpty()) {
+
+        /*if (!boms.isEmpty()) {
             BomUpload lastBom = boms.get(0);
             answer.append(String.format("\nLast SBOM Upload: %s (%s)\n",
                 lastBom.imported() != null ? lastBom.imported() : "Unknown",
                 lastBom.bomFormat() != null ? lastBom.bomFormat() : "Unknown format"));
-        }
+        }*/
         
         // Enhance with LLM if available
         try {
             String enhanced = llmClient.generate(
-                "Based on this Dependency Track project information: " + answer.toString() +
+                "Based on this Dependency Track project information: " + answer +
                 "\nAnswer this question: " + query +
                 "\nProvide a clear, technical response."
             );
@@ -910,6 +918,17 @@ public class QueryService {
             project,
             1.0
         );
+    }
+
+    private java.time.Instant parseInstantSafe(String value) {
+        if (value == null || value.isEmpty()) {
+            return java.time.Instant.MIN;
+        }
+        try {
+            return java.time.Instant.parse(value);
+        } catch (Exception e) {
+            return java.time.Instant.MIN;
+        }
     }
     
     private String formatWorkflowResultsAnswer(WorkflowResults results, String query) {

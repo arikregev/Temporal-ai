@@ -118,7 +118,7 @@ public class DependencyTrackClient {
     public List<BomUpload> getBomHistory(UUID projectUuid) {
         try {
             Log.debug("Getting BOM history for project: " + projectUuid);
-            List<BomUpload> boms = dtApi.getBomHistory(projectUuid);
+            List<BomUpload> boms = dtApi.getProjectBoms(projectUuid);
             Log.info("Retrieved " + boms.size() + " BOM uploads for project " + projectUuid);
             return boms;
         } catch (Exception e) {
@@ -147,8 +147,8 @@ public class DependencyTrackClient {
         ProjectMetrics getProjectMetrics(@PathParam("uuid") UUID uuid);
         
         @GET
-        @Path("/bom")
-        List<BomUpload> getBomHistory(@QueryParam("project") UUID projectUuid);
+        @Path("/project/{uuid}/bom")
+        List<BomUpload> getProjectBoms(@PathParam("uuid") UUID projectUuid);
     }
     
     @JsonIgnoreProperties(ignoreUnknown = true)
@@ -191,7 +191,8 @@ public class DependencyTrackClient {
         @JsonProperty("bomFormat") String bomFormat,
         @JsonProperty("specVersion") String specVersion,
         @JsonProperty("imported") String imported,
-        @JsonProperty("importedBy") String importedBy
+        @JsonProperty("importedBy") String importedBy,
+        @JsonProperty("filename") String filename
     ) {}
 }
 
