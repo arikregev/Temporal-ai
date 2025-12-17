@@ -119,8 +119,9 @@ public class LlmClient {
                 - CWE_STATISTICS: Questions about CWE counts, trends, or statistics
                 - FINDING_EXPLANATION: Questions asking to explain a specific finding
                 - POLICY_QUERY: Questions about policies or policy creation
-                - GENERAL: Other questions
                 - WORKFLOW_RESULTS: Questions regarding the results / outcome of a workflow
+                - DEPENDENCY_TRACK: Questions about Dependency Track projects, vulnerabilities, SBOM uploads, or project security metrics
+                - GENERAL: Other questions
                 Query: %s
                 
                 Respond with only the category name.
@@ -144,6 +145,7 @@ public class LlmClient {
                 case "FINDING_EXPLANATION" -> QueryIntent.IntentType.FINDING_EXPLANATION;
                 case "POLICY_QUERY" -> QueryIntent.IntentType.POLICY_QUERY;
                 case "WORKFLOW_RESULTS" -> QueryIntent.IntentType.WORKFLOW_RESULTS;
+                case "DEPENDENCY_TRACK" -> QueryIntent.IntentType.DEPENDENCY_TRACK;
                 default -> QueryIntent.IntentType.GENERAL;
             };
             
@@ -202,6 +204,7 @@ public class LlmClient {
             FINDING_EXPLANATION,
             POLICY_QUERY,
             WORKFLOW_RESULTS,
+            DEPENDENCY_TRACK,
             GENERAL
         }
     }

@@ -6,6 +6,10 @@ import com.temporal.ai.data.QueryLayer.ScanComparison;
 import com.temporal.ai.data.QueryLayer.ScanDurationAnalysis;
 import com.temporal.ai.data.QueryLayer.WorkflowResults;
 import com.temporal.ai.data.QueryLayer.FailedActivity;
+import com.temporal.ai.dependencytrack.DependencyTrackClient;
+import com.temporal.ai.dependencytrack.DependencyTrackClient.Project;
+import com.temporal.ai.dependencytrack.DependencyTrackClient.ProjectMetrics;
+import com.temporal.ai.dependencytrack.DependencyTrackClient.BomUpload;
 import com.temporal.ai.knowledge.KnowledgeBaseService.KnowledgeBaseMatch;
 import com.temporal.ai.knowledge.KnowledgeBaseService;
 import com.temporal.ai.llm.LlmClient;
@@ -33,12 +37,19 @@ public class QueryService {
     @Inject
     KnowledgeBaseService knowledgeBaseService;
     
+    @Inject
+    DependencyTrackClient dependencyTrackClient;
+    
     private static final Pattern SCAN_ID_PATTERN = Pattern.compile("scan\\s+([a-zA-Z0-9_:-]+)", Pattern.CASE_INSENSITIVE);
     private static final Pattern WORKFLOW_ID_PATTERN = Pattern.compile("workflow\\s+([a-zA-Z0-9_:-]+)", Pattern.CASE_INSENSITIVE);
     // Pattern to match UUIDs or workflow IDs in various formats
     private static final Pattern UUID_PATTERN = Pattern.compile("([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", Pattern.CASE_INSENSITIVE);
     // Pattern to match workflow IDs (alphanumeric with dashes/underscores/colons, typically 20+ chars)
     private static final Pattern WORKFLOW_ID_IN_TEXT_PATTERN = Pattern.compile("([a-zA-Z0-9_:-]{20,})", Pattern.CASE_INSENSITIVE);
+    // Pattern to match project ID and version: "project XXXX version YYYY" or "project XXXX:YYYY"
+    private static final Pattern PROJECT_VERSION_PATTERN = Pattern.compile("project\\s+([a-zA-Z0-9_:-]+)\\s+version\\s+([a-zA-Z0-9_:-]+)", Pattern.CASE_INSENSITIVE);
+    // Pattern to match project:version format: "project XXXX:YYYY"
+    private static final Pattern PROJECT_COLON_VERSION_PATTERN = Pattern.compile("project\\s+([a-zA-Z0-9_-]+):([a-zA-Z0-9_:-]+)", Pattern.CASE_INSENSITIVE);
     private static final Pattern TEAM_PATTERN = Pattern.compile("team\\s+(\\w+)", Pattern.CASE_INSENSITIVE);
     private static final Pattern DAYS_PATTERN = Pattern.compile("(\\d+)\\s+days?", Pattern.CASE_INSENSITIVE);
     
@@ -91,6 +102,12 @@ public class QueryService {
             lowerQuery.contains("allow") || lowerQuery.contains("enforce")) {
             return new LlmClient.QueryIntent(LlmClient.QueryIntent.IntentType.POLICY_QUERY, query);
         }
+        if (lowerQuery.contains("dependency track") || lowerQuery.contains("dependencytrack") || 
+            lowerQuery.contains("dt") || lowerQuery.contains("vulnerabilities") || 
+            lowerQuery.contains("sbom") || lowerQuery.contains("bom upload") ||
+            (lowerQuery.contains("project") && (lowerQuery.contains("version") || lowerQuery.contains("vulnerabilit")))) {
+            return new LlmClient.QueryIntent(LlmClient.QueryIntent.IntentType.DEPENDENCY_TRACK, query);
+        }
         
         return new LlmClient.QueryIntent(LlmClient.QueryIntent.IntentType.GENERAL, query);
     }
@@ -131,6 +148,7 @@ public class QueryService {
             case FINDING_EXPLANATION -> handleFindingExplanationQuery(query);
             case POLICY_QUERY -> handlePolicyQuery(query);
             case WORKFLOW_RESULTS -> handleWorkflowResultsQuery(query, team);
+            case DEPENDENCY_TRACK -> handleDependencyTrackQuery(query);
             default -> handleGeneralQuery(query, team);
         };
     }
@@ -545,6 +563,372 @@ public class QueryService {
             results,
             1.0
         );
+    }
+    
+    private QueryResponse handleDependencyTrackQuery(String query) {
+        Log.info("Handling Dependency Track query: " + query);
+        
+        String projectId = null;
+        String version = null;
+        
+        // Try to extract project ID and version from query
+        Matcher projectVersionMatcher = PROJECT_VERSION_PATTERN.matcher(query);
+        Matcher projectColonVersionMatcher = PROJECT_COLON_VERSION_PATTERN.matcher(query);
+        
+        if (projectVersionMatcher.find()) {
+            projectId = projectVersionMatcher.group(1);
+            version = projectVersionMatcher.group(2);
+            Log.info("Extracted project ID: " + projectId + ", version: " + version);
+        } else if (projectColonVersionMatcher.find()) {
+            projectId = projectColonVersionMatcher.group(1);
+            version = projectColonVersionMatcher.group(2);
+            Log.info("Extracted project ID: " + projectId + ", version: " + version + " (colon format)");
+        } else {
+            // Try LLM extraction
+            try {
+                String extracted = llmClient.generate(
+                        "Extract the project ID adn version in format XXXX:XXXX from this query: " + query +
+                                "\nRespond with only the ID, nothing else. No comments. If no ID found, respond with 'NONE'."
+                );
+                String trimmed = extracted.trim();
+                if (!trimmed.equalsIgnoreCase("NONE") && !trimmed.isEmpty() && 
+                    !trimmed.contains("unavailable") && !trimmed.contains("error")) {
+                    String[] parts = trimmed.split(":");
+                    if (parts.length == 2) {
+                        projectId = parts[0].trim();
+                        version = parts[1].trim();
+                        Log.info("LLM extracted project ID: " + projectId + ", version: " + version);
+                    }
+                }
+            } catch (Exception e) {
+                Log.debug("LLM extraction failed: " + e.getMessage());
+            }
+        }
+        
+        if (projectId == null || version == null) {
+            return new QueryResponse(
+                QueryResponse.ResponseSource.LLM,
+                "Could not identify project ID and version from the query. " +
+                "Please use format: 'project PROJECT_ID version VERSION' or 'project PROJECT_ID:VERSION'",
+                null,
+                0.0
+            );
+        }
+        
+        // Lookup project in Dependency Track
+        Log.info("Looking up project in Dependency Track: " + projectId + ":" + version);
+        Optional<Project> projectOpt = dependencyTrackClient.lookupProject(projectId, version);
+        
+        if (projectOpt.isEmpty()) {
+            return new QueryResponse(
+                QueryResponse.ResponseSource.QUERY_LAYER,
+                "Project '" + projectId + "' version '" + version + "' not found in Dependency Track. " +
+                "Please verify the project ID and version are correct.",
+                null,
+                0.5
+            );
+        }
+        
+        Project project = projectOpt.get();
+        String lowerQuery = query.toLowerCase();
+        
+        // Determine what information to fetch based on query
+        /*if (lowerQuery.contains("vulnerabilit") && (lowerQuery.contains("how many") || lowerQuery.contains("count"))) {
+            return handleVulnerabilityCountQuery(project, query);
+        } else if (lowerQuery.contains("severity") || lowerQuery.contains("highest") || lowerQuery.contains("critical") || 
+                   lowerQuery.contains("high") || lowerQuery.contains("medium") || lowerQuery.contains("low")) {
+            return handleSeverityQuery(project, query);
+        } else if (lowerQuery.contains("sbom") || lowerQuery.contains("bom") || lowerQuery.contains("upload")) {
+            return handleSbomQuery(project, query);
+        } else {
+            // General project query - return comprehensive info
+            return handleGeneralDependencyTrackQuery(project, query);
+        }*/
+        return handleGeneralDependencyTrackQuery(project, query);
+    }
+    
+    private QueryResponse handleVulnerabilityCountQuery(Project project, String query) {
+        Optional<ProjectMetrics> metricsOpt = dependencyTrackClient.getProjectMetrics(project.uuid());
+        
+        if (metricsOpt.isEmpty()) {
+            return new QueryResponse(
+                QueryResponse.ResponseSource.QUERY_LAYER,
+                "Could not retrieve vulnerability metrics for project '" + project.name() + "' version '" + project.version() + "'.",
+                null,
+                0.5
+            );
+        }
+        
+        ProjectMetrics metrics = metricsOpt.get();
+        int totalVulnerabilities = metrics.vulnerabilities() != null ? metrics.vulnerabilities() : 0;
+        
+        String answer = String.format(
+            "Project '%s' version '%s' has %d total vulnerabilities:\n" +
+            "- Critical: %d\n" +
+            "- High: %d\n" +
+            "- Medium: %d\n" +
+            "- Low: %d\n" +
+            "- Unassigned: %d",
+            project.name(),
+            project.version(),
+            totalVulnerabilities,
+            metrics.critical() != null ? metrics.critical() : 0,
+            metrics.high() != null ? metrics.high() : 0,
+            metrics.medium() != null ? metrics.medium() : 0,
+            metrics.low() != null ? metrics.low() : 0,
+            metrics.unassigned() != null ? metrics.unassigned() : 0
+        );
+        
+        // Enhance with LLM if available
+        try {
+            String enhanced = llmClient.generate(
+                "Based on this vulnerability data: " + answer + 
+                "\nProvide a clear, technical summary of the security status."
+            );
+            if (!enhanced.contains("unavailable") && !enhanced.contains("Error:")) {
+                answer = enhanced;
+            }
+        } catch (Exception e) {
+            Log.debug("LLM enhancement failed, using basic answer");
+        }
+        
+        return new QueryResponse(
+            QueryResponse.ResponseSource.QUERY_LAYER,
+            answer,
+            metrics,
+            1.0
+        );
+    }
+    
+    private QueryResponse handleSeverityQuery(Project project, String query) {
+        Optional<ProjectMetrics> metricsOpt = dependencyTrackClient.getProjectMetrics(project.uuid());
+        
+        if (metricsOpt.isEmpty()) {
+            return new QueryResponse(
+                QueryResponse.ResponseSource.QUERY_LAYER,
+                "Could not retrieve severity information for project '" + project.name() + "' version '" + project.version() + "'.",
+                null,
+                0.5
+            );
+        }
+        
+        ProjectMetrics metrics = metricsOpt.get();
+        String lowerQuery = query.toLowerCase();
+        
+        String answer;
+        if (lowerQuery.contains("highest") || lowerQuery.contains("maximum")) {
+            // Determine highest severity
+            int critical = metrics.critical() != null ? metrics.critical() : 0;
+            int high = metrics.high() != null ? metrics.high() : 0;
+            int medium = metrics.medium() != null ? metrics.medium() : 0;
+            int low = metrics.low() != null ? metrics.low() : 0;
+            
+            String highestSeverity;
+            int highestCount;
+            if (critical > 0) {
+                highestSeverity = "CRITICAL";
+                highestCount = critical;
+            } else if (high > 0) {
+                highestSeverity = "HIGH";
+                highestCount = high;
+            } else if (medium > 0) {
+                highestSeverity = "MEDIUM";
+                highestCount = medium;
+            } else if (low > 0) {
+                highestSeverity = "LOW";
+                highestCount = low;
+            } else {
+                highestSeverity = "NONE";
+                highestCount = 0;
+            }
+            
+            answer = String.format(
+                "The highest severity for project '%s' version '%s' is %s with %d vulnerabilities.",
+                project.name(),
+                project.version(),
+                highestSeverity,
+                highestCount
+            );
+        } else if (lowerQuery.contains("critical")) {
+            int critical = metrics.critical() != null ? metrics.critical() : 0;
+            answer = String.format(
+                "Project '%s' version '%s' has %d critical vulnerabilities.",
+                project.name(),
+                project.version(),
+                critical
+            );
+        } else if (lowerQuery.contains("high")) {
+            int high = metrics.high() != null ? metrics.high() : 0;
+            answer = String.format(
+                "Project '%s' version '%s' has %d high severity vulnerabilities.",
+                project.name(),
+                project.version(),
+                high
+            );
+        } else {
+            // General severity breakdown
+            answer = String.format(
+                "Project '%s' version '%s' severity breakdown:\n" +
+                "- Critical: %d\n" +
+                "- High: %d\n" +
+                "- Medium: %d\n" +
+                "- Low: %d",
+                project.name(),
+                project.version(),
+                metrics.critical() != null ? metrics.critical() : 0,
+                metrics.high() != null ? metrics.high() : 0,
+                metrics.medium() != null ? metrics.medium() : 0,
+                metrics.low() != null ? metrics.low() : 0
+            );
+        }
+        
+        return new QueryResponse(
+            QueryResponse.ResponseSource.QUERY_LAYER,
+            answer,
+            metrics,
+            1.0
+        );
+    }
+    
+    private QueryResponse handleSbomQuery(Project project, String query) {
+        List<BomUpload> boms = dependencyTrackClient.getBomHistory(project.uuid());
+        // Sort by imported date descending when available
+        boms = boms.stream()
+            .sorted((a, b) -> parseInstantSafe(b.imported()).compareTo(parseInstantSafe(a.imported())))
+            .toList();
+        
+        String lowerQuery = query.toLowerCase();
+        if (lowerQuery.contains("last") || lowerQuery.contains("when")) {
+            if (boms.isEmpty()) {
+                return new QueryResponse(
+                    QueryResponse.ResponseSource.QUERY_LAYER,
+                    "No SBOM uploads found for project '" + project.name() + "' version '" + project.version() + "'.",
+                    null,
+                    1.0
+                );
+            }
+            
+            // Get most recent BOM
+            BomUpload lastBom = boms.get(0); // Assuming sorted by date descending
+            String lastUpload = lastBom.imported() != null ? lastBom.imported() : "Unknown";
+            String format = lastBom.bomFormat() != null ? lastBom.bomFormat() : "Unknown format";
+            
+            String answer = String.format(
+                "Last SBOM upload for project '%s' version '%s':\n" +
+                "- Uploaded: %s\n" +
+                "- Format: %s\n" +
+                "- Spec Version: %s",
+                project.name(),
+                project.version(),
+                lastUpload,
+                format,
+                lastBom.specVersion() != null ? lastBom.specVersion() : "N/A"
+            );
+            
+            return new QueryResponse(
+                QueryResponse.ResponseSource.QUERY_LAYER,
+                answer,
+                lastBom,
+                1.0
+            );
+        } else {
+            // SBOM history
+            if (boms.isEmpty()) {
+                return new QueryResponse(
+                    QueryResponse.ResponseSource.QUERY_LAYER,
+                    "No SBOM upload history found for project '" + project.name() + "' version '" + project.version() + "'.",
+                    null,
+                    1.0
+                );
+            }
+            
+            StringBuilder answer = new StringBuilder();
+            answer.append(String.format("SBOM upload history for project '%s' version '%s':\n\n", 
+                project.name(), project.version()));
+            
+            for (int i = 0; i < Math.min(boms.size(), 10); i++) {
+                BomUpload bom = boms.get(i);
+                answer.append(String.format("%d. Uploaded: %s, Format: %s\n",
+                    i + 1,
+                    bom.imported() != null ? bom.imported() : "Unknown",
+                    bom.bomFormat() != null ? bom.bomFormat() : "Unknown"));
+            }
+            
+            if (boms.size() > 10) {
+                answer.append(String.format("\n... and %d more uploads", boms.size() - 10));
+            }
+            
+            return new QueryResponse(
+                QueryResponse.ResponseSource.QUERY_LAYER,
+                answer.toString(),
+                boms,
+                1.0
+            );
+        }
+    }
+    
+    private QueryResponse handleGeneralDependencyTrackQuery(Project project, String query) {
+        Optional<ProjectMetrics> metricsOpt = dependencyTrackClient.getProjectMetrics(project.uuid());
+        /*List<BomUpload> boms = dependencyTrackClient.getBomHistory(project.uuid()).stream()
+            .sorted((a, b) -> parseInstantSafe(b.imported()).compareTo(parseInstantSafe(a.imported())))
+            .toList();*/
+        
+        StringBuilder answer = new StringBuilder();
+        answer.append(String.format("Project: %s\nVersion: %s\n", project.name(), project.version()));
+        
+        if (project.description() != null && !project.description().isEmpty()) {
+            answer.append(String.format("Description: %s\n", project.description()));
+        }
+        
+        if (metricsOpt.isPresent()) {
+            ProjectMetrics metrics = metricsOpt.get();
+            answer.append(String.format("Number of components: %d\n", metrics.components()));
+            answer.append(String.format("\nVulnerability Summary:\n"));
+            answer.append(String.format("- Total: %d\n", metrics.vulnerabilities() != null ? metrics.vulnerabilities() : 0));
+            answer.append(String.format("- Critical: %d\n", metrics.critical() != null ? metrics.critical() : 0));
+            answer.append(String.format("- High: %d\n", metrics.high() != null ? metrics.high() : 0));
+            answer.append(String.format("- Medium: %d\n", metrics.medium() != null ? metrics.medium() : 0));
+            answer.append(String.format("- Low: %d\n", metrics.low() != null ? metrics.low() : 0));
+        }
+
+        /*if (!boms.isEmpty()) {
+            BomUpload lastBom = boms.get(0);
+            answer.append(String.format("\nLast SBOM Upload: %s (%s)\n",
+                lastBom.imported() != null ? lastBom.imported() : "Unknown",
+                lastBom.bomFormat() != null ? lastBom.bomFormat() : "Unknown format"));
+        }*/
+        
+        // Enhance with LLM if available
+        try {
+            String enhanced = llmClient.generate(
+                "Based on this Dependency Track project information: " + answer +
+                "\nAnswer this question: " + query +
+                "\nProvide a clear, technical response."
+            );
+            if (!enhanced.contains("unavailable") && !enhanced.contains("Error:")) {
+                answer = new StringBuilder(enhanced);
+            }
+        } catch (Exception e) {
+            Log.debug("LLM enhancement failed, using basic answer");
+        }
+        
+        return new QueryResponse(
+            QueryResponse.ResponseSource.QUERY_LAYER,
+            answer.toString(),
+            project,
+            1.0
+        );
+    }
+
+    private java.time.Instant parseInstantSafe(String value) {
+        if (value == null || value.isEmpty()) {
+            return java.time.Instant.MIN;
+        }
+        try {
+            return java.time.Instant.parse(value);
+        } catch (Exception e) {
+            return java.time.Instant.MIN;
+        }
     }
     
     private String formatWorkflowResultsAnswer(WorkflowResults results, String query) {
