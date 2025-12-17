@@ -587,9 +587,8 @@ public class QueryService {
             // Try LLM extraction
             try {
                 String extracted = llmClient.generate(
-                    "Extract the project ID and version from this Dependency Track query: " + query +
-                    "\nFormat: PROJECT_ID:VERSION or PROJECT_ID version VERSION" +
-                    "\nRespond with only PROJECT_ID:VERSION format, nothing else. If no project found, respond with 'NONE'."
+                        "Extract the project ID adn version in format XXXX:XXXX from this query: " + query +
+                                "\nRespond with only the ID, nothing else. No comments. If no ID found, respond with 'NONE'."
                 );
                 String trimmed = extracted.trim();
                 if (!trimmed.equalsIgnoreCase("NONE") && !trimmed.isEmpty() && 
